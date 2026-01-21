@@ -1,0 +1,6 @@
+comment = 'supamonitor'
+default_version = '@CARGO_VERSION@'
+module_pathname = 'supamonitor'
+relocatable = false
+superuser = true
+trusted = false
