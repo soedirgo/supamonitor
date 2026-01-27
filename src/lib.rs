@@ -1,33 +1,18 @@
-use heapless::index_map::FnvIndexMap;
 use pgrx::{
-    lwlock::PgLwLock,
-    pg_shmem_init,
     pg_sys::{ffi::pg_guard_ffi_boundary, EnableQueryId},
     prelude::*,
-    shmem::*,
 };
+use serde::Serialize;
 
 pgrx::pg_module_magic!(name, version);
 
-#[derive(Copy, Clone, Debug)]
-pub struct SmQuery {
-    query_text: [u8; 256],
-    num_calls: usize,
+#[derive(Serialize)]
+struct SmQueryLog<'a> {
+    query: &'a str,
+    calls: usize,
 }
 
-impl Default for SmQuery {
-    fn default() -> Self {
-        Self {
-            query_text: [0u8; 256],
-            num_calls: 0,
-        }
-    }
-}
-
-unsafe impl PGRXSharedMemory for SmQuery {}
-
-static SUPAMONITOR_SHARED_STATE: PgLwLock<AssertPGRXSharedMemory<FnvIndexMap<i32, SmQuery, 1024>>> =
-    unsafe { PgLwLock::new(c"supamonitor") };
+static SUPAMONITOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[pg_guard]
 pub unsafe extern "C-unwind" fn _PG_init() {
@@ -35,10 +20,6 @@ pub unsafe extern "C-unwind" fn _PG_init() {
         pgrx::error!("this extension must be loaded via shared_preload_libraries.");
     }
     EnableQueryId();
-
-    pg_shmem_init!(
-        SUPAMONITOR_SHARED_STATE = unsafe { AssertPGRXSharedMemory::new(Default::default()) }
-    );
 
     // post_parse_analyze_hook
     static mut PREV_POST_PARSE_ANALYZE_HOOK: pg_sys::post_parse_analyze_hook_type = None;
@@ -51,6 +32,7 @@ pub unsafe extern "C-unwind" fn _PG_init() {
         query: *mut pg_sys::Query,
         jumble_state: *mut pg_sys::JumbleState,
     ) {
+        pgrx::debug1!("TODO post_parse_analyze_hook");
         if let Some(prev_hook) = PREV_POST_PARSE_ANALYZE_HOOK {
             pg_guard_ffi_boundary(|| prev_hook(parse_state, query, jumble_state));
         }
@@ -68,12 +50,11 @@ pub unsafe extern "C-unwind" fn _PG_init() {
         cursor_options: std::ffi::c_int,
         bound_params: *mut pg_sys::ParamListInfoData,
     ) -> *mut pg_sys::PlannedStmt {
+        pgrx::debug1!("TODO planner_hook");
         if let Some(prev_hook) = PREV_PLANNER_HOOK {
             pg_guard_ffi_boundary(|| prev_hook(parse, query_string, cursor_options, bound_params))
         } else {
-            pg_guard_ffi_boundary(|| {
-                pg_sys::standard_planner(parse, query_string, cursor_options, bound_params)
-            })
+            pg_sys::standard_planner(parse, query_string, cursor_options, bound_params)
         }
     }
 
@@ -87,10 +68,11 @@ pub unsafe extern "C-unwind" fn _PG_init() {
         query_desc: *mut pg_sys::QueryDesc,
         eflags: std::ffi::c_int,
     ) {
+        pgrx::debug1!("TODO ExecutorStart_hook");
         if let Some(prev_hook) = PREV_EXECUTOR_START_HOOK {
             pg_guard_ffi_boundary(|| prev_hook(query_desc, eflags));
         } else {
-            pg_guard_ffi_boundary(|| pg_sys::standard_ExecutorStart(query_desc, eflags));
+            pg_sys::standard_ExecutorStart(query_desc, eflags);
         }
     }
 
@@ -106,12 +88,11 @@ pub unsafe extern "C-unwind" fn _PG_init() {
         count: u64,
         execute_once: bool,
     ) {
+        pgrx::debug1!("TODO ExecutorRun_hook");
         if let Some(prev_hook) = PREV_EXECUTOR_RUN_HOOK {
             pg_guard_ffi_boundary(|| prev_hook(query_desc, direction, count, execute_once));
         } else {
-            pg_guard_ffi_boundary(|| {
-                pg_sys::standard_ExecutorRun(query_desc, direction, count, execute_once)
-            });
+            pg_sys::standard_ExecutorRun(query_desc, direction, count, execute_once);
         }
     }
 
@@ -122,10 +103,11 @@ pub unsafe extern "C-unwind" fn _PG_init() {
 
     #[pg_guard]
     unsafe extern "C-unwind" fn executor_finish_hook(query_desc: *mut pg_sys::QueryDesc) {
+        pgrx::debug1!("TODO ExecutorFinish_hook");
         if let Some(prev_hook) = PREV_EXECUTOR_FINISH_HOOK {
             pg_guard_ffi_boundary(|| prev_hook(query_desc));
         } else {
-            pg_guard_ffi_boundary(|| pg_sys::standard_ExecutorFinish(query_desc));
+            pg_sys::standard_ExecutorFinish(query_desc);
         }
     }
 
@@ -139,7 +121,8 @@ pub unsafe extern "C-unwind" fn _PG_init() {
         if let Some(prev_hook) = PREV_EXECUTOR_END_HOOK {
             pg_guard_ffi_boundary(|| prev_hook(query_desc));
         } else {
-            pg_guard_ffi_boundary(|| pg_sys::standard_ExecutorEnd(query_desc));
+            pgrx::debug1!("TODO ExecutorEnd_hook");
+            pg_sys::standard_ExecutorEnd(query_desc);
         }
     }
 
@@ -159,6 +142,15 @@ pub unsafe extern "C-unwind" fn _PG_init() {
         dest: *mut pg_sys::DestReceiver,
         qc: *mut pg_sys::QueryCompletion,
     ) {
+        let query_text = std::ffi::CStr::from_ptr(query_string).to_string_lossy();
+        let log_entry = SmQueryLog {
+            query: &query_text,
+            calls: 1,
+        };
+        if let Ok(json) = serde_json::to_string(&log_entry) {
+            pgrx::log!("supamonitor_{SUPAMONITOR_VERSION}_log:{json}");
+        }
+
         if let Some(prev_hook) = PREV_PROCESS_UTILITY_HOOK {
             pg_guard_ffi_boundary(|| {
                 prev_hook(
@@ -173,18 +165,16 @@ pub unsafe extern "C-unwind" fn _PG_init() {
                 )
             });
         } else {
-            pg_guard_ffi_boundary(|| {
-                pg_sys::standard_ProcessUtility(
-                    pstmt,
-                    query_string,
-                    read_only_tree,
-                    context,
-                    params,
-                    query_env,
-                    dest,
-                    qc,
-                )
-            });
+            pg_sys::standard_ProcessUtility(
+                pstmt,
+                query_string,
+                read_only_tree,
+                context,
+                params,
+                query_env,
+                dest,
+                qc,
+            );
         }
     }
 }

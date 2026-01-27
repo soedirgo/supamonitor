@@ -1462,6 +1462,8 @@ dependencies = [
  "heapless",
  "pgrx",
  "pgrx-tests",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

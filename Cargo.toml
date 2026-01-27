@@ -24,6 +24,8 @@ pg_test = []
 [dependencies]
 heapless = "0.9.2"
 pgrx = { version = "=0.16.1", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
 pgrx-tests = "=0.16.1"
