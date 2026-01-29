@@ -38,7 +38,7 @@ jobs:
           - supamonitor
         pgrx_version:
           - 0.16.1
-        postgres: [14, 15, 16, 17, 18]
+        postgres: [14, 15, 16, 17]
         box:
           - { runner: ubuntu-22.04-arm, arch: arm64 }
     runs-on: ${{ matrix.box.runner }}
