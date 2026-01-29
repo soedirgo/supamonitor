@@ -78,10 +78,6 @@ jobs:
           # https://github.com/tcdi/pgrx/issues/288
           cargo pgrx package --no-default-features --features pg${{ matrix.postgres }}
 
-          # Extension version and path
-          extension_version=${{ github.ref_name }}
-          extension_dir=./target/release/${{ matrix.extension_name }}-pg${{ matrix.postgres }}/usr/share/postgresql/${{ matrix.postgres }}/extension
-
       - name: Get asset name
         run: |
           ASSET_NAME=${{ matrix.extension_name }}-${{ github.ref_name }}-pg${{ matrix.postgres }}-${{ matrix.box.arch }}-linux-gnu.so
@@ -98,46 +94,46 @@ jobs:
           asset_name: ${{ env.ASSET_NAME }}
           asset_content_type: application/octet-stream
 
-      - name: Upload build artifacts for bundling
-        if: ${{ matrix.box.arch == 'arm64' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ASSET_NAME }}
-          path: ./${{ env.ASSET_NAME }}
+  #     - name: Upload build artifacts for bundling
+  #       if: ${{ matrix.box.arch == 'arm64' }}
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: ${{ env.ASSET_NAME }}
+  #         path: ./${{ env.ASSET_NAME }}
 
-  # Upload to shared-services bucket
-  bundle-build-artifacts:
-    name: Bundle build artifacts
-    needs:
-      - build-linux-gnu
-    runs-on: ubuntu-22.04-arm
-    steps:
-      - name: Download build artifacts for bundling
-        uses: actions/download-artifact@v4
-        with:
-          pattern: '*.so'
-          merge-multiple: true
+  # # Upload to shared-services bucket
+  # bundle-build-artifacts:
+  #   name: Bundle build artifacts
+  #   needs:
+  #     - build-linux-gnu
+  #   runs-on: ubuntu-22.04-arm
+  #   steps:
+  #     - name: Download build artifacts for bundling
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         pattern: '*.so'
+  #         merge-multiple: true
 
-      - name: Bundle build artifacts
-        run: |
-          tar -cJf supamonitor-${{ github.ref_name }}-arm64.tar.xz *.so
+  #     - name: Bundle build artifacts
+  #       run: |
+  #         tar -cJf supamonitor-${{ github.ref_name }}-arm64.tar.xz *.so
 
-      - name: GitHub OIDC Auth
-        uses: aws-actions/configure-aws-credentials@v4.1.0
-        with:
-          aws-region: ap-southeast-1
-          role-to-assume: ${{ secrets.SHARED_SERVICES_OIDC }}
-          role-session-name: shared-services-jump
+  #     - name: GitHub OIDC Auth
+  #       uses: aws-actions/configure-aws-credentials@v4.1.0
+  #       with:
+  #         aws-region: ap-southeast-1
+  #         role-to-assume: ${{ secrets.SHARED_SERVICES_OIDC }}
+  #         role-session-name: shared-services-jump
 
-      - name: Assume destination role
-        uses: aws-actions/configure-aws-credentials@v4.1.0
-        with:
-          aws-region: ap-southeast-1
-          role-to-assume: ${{ secrets.SHARED_SERVICES_ROLE }}
-          role-skip-session-tagging: true
-          role-session-name: upload-assets
-          role-chaining: true
+  #     - name: Assume destination role
+  #       uses: aws-actions/configure-aws-credentials@v4.1.0
+  #       with:
+  #         aws-region: ap-southeast-1
+  #         role-to-assume: ${{ secrets.SHARED_SERVICES_ROLE }}
+  #         role-skip-session-tagging: true
+  #         role-session-name: upload-assets
+  #         role-chaining: true
 
-      - name: Upload bundle to shared services bucket
-        run: |
-          aws s3 sync --no-progress ./ s3://${{ secrets.SHARED_SERVICES_BUCKET }}/supamonitor/${GITHUB_REF_NAME#v} --exclude '*' --include '*tar.xz'
+  #     - name: Upload bundle to shared services bucket
+  #       run: |
+  #         aws s3 sync --no-progress ./ s3://${{ secrets.SHARED_SERVICES_BUCKET }}/supamonitor/${GITHUB_REF_NAME#v} --exclude '*' --include '*tar.xz'
