@@ -81,7 +81,7 @@ jobs:
       - name: Get asset name
         run: |
           ASSET_NAME=${{ matrix.extension_name }}-${{ github.ref_name }}-pg${{ matrix.postgres }}-${{ matrix.box.arch }}-linux-gnu.so
-          mv ./target/release/${{ matrix.extension_name }}-pg${{ matrix.postgres }}/usr/lib/postgresql/lib/${{ matrix.extension_name }}.so ./$ASSET_NAME
+          mv ./target/release/${{ matrix.extension_name }}-pg${{ matrix.postgres }}/usr/lib/postgresql/${{ matrix.postgres }}/lib/${{ matrix.extension_name }}.so ./$ASSET_NAME
           echo "ASSET_NAME=$ASSET_NAME" >> $GITHUB_ENV
 
       - name: Upload release asset
