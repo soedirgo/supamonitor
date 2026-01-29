@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    # Sequence of patterns matched against refs/tags
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
+permissions:
+  id-token: write # This is required for requesting the JWT from AWS
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Create Release
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+        run: |
+          gh release create "$tag" \
+              --repo="$GITHUB_REPOSITORY" \
+              --title="${tag}" \
+              --generate-notes
+
+  build-linux-gnu:
+    name: release artifacts
+    needs:
+      - release
+    strategy:
+      matrix:
+        extension_name:
+          - supamonitor
+        pgrx_version:
+          - 0.16.1
+        postgres: [14, 15, 16, 17, 18]
+        box:
+          - { runner: ubuntu-22.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.box.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: build release artifacts
+        run: |
+          # Add postgres package repo
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo tee /etc/apt/trusted.gpg.d/pgdg.asc &>/dev/null
+
+          sudo apt-get update
+
+          # Install requested postgres version
+          sudo apt-get install -y --no-install-recommends postgresql-${{ matrix.postgres }} postgresql-server-dev-${{ matrix.postgres }}
+
+          # Ensure installed pg_config is first on path
+          export PATH="/usr/lib/postgresql/${{ matrix.postgres }}/bin:$PATH"
+
+          RUST_VERSION=$(grep '^rust-version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" && \
+            rustup --version && \
+            rustc --version && \
+            cargo --version
+
+          # Ensure cargo/rust on path
+          source "$HOME/.cargo/env"
+
+          cargo install --locked cargo-pgrx --version ${{ matrix.pgrx_version }}
+          cargo pgrx init --pg${{ matrix.postgres }}=/usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_config
+
+          # selects the pgVer from pg_config on path
+          # https://github.com/tcdi/pgrx/issues/288
+          cargo pgrx package --no-default-features --features pg${{ matrix.postgres }}
+
+          # Extension version and path
+          extension_version=${{ github.ref_name }}
+          extension_dir=./target/release/${{ matrix.extension_name }}-pg${{ matrix.postgres }}/usr/share/postgresql/${{ matrix.postgres }}/extension
+
+      - name: Get asset name
+        run: |
+          ASSET_NAME=${{ matrix.extension_name }}-${{ github.ref_name }}-pg${{ matrix.postgres }}-${{ matrix.box.arch }}-linux-gnu.so
+          mv ./target/release/${{ matrix.extension_name }}-pg${{ matrix.postgres }}/usr/lib/postgresql/${{ matrix.extension_name }}.so ./$ASSET_NAME
+          echo "ASSET_NAME=$ASSET_NAME" >> $GITHUB_ENV
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: ./${{ env.ASSET_NAME }}
+          asset_name: ${{ env.ASSET_NAME }}
+          asset_content_type: application/octet-stream
+
+      - name: Upload build artifacts for bundling
+        if: ${{ matrix.box.arch == 'arm64' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: ./${{ env.ASSET_NAME }}
+
+  # Upload to shared-services bucket
+  bundle-build-artifacts:
+    name: Bundle build artifacts
+    needs:
+      - build-linux-gnu
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Download build artifacts for bundling
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*.so'
+          merge-multiple: true
+
+      - name: Bundle build artifacts
+        run: |
+          tar -cJf supamonitor-${{ github.ref_name }}-arm64.tar.xz *.so
+
+      - name: GitHub OIDC Auth
+        uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          aws-region: ap-southeast-1
+          role-to-assume: ${{ secrets.SHARED_SERVICES_OIDC }}
+          role-session-name: shared-services-jump
+
+      - name: Assume destination role
+        uses: aws-actions/configure-aws-credentials@v4.1.0
+        with:
+          aws-region: ap-southeast-1
+          role-to-assume: ${{ secrets.SHARED_SERVICES_ROLE }}
+          role-skip-session-tagging: true
+          role-session-name: upload-assets
+          role-chaining: true
+
+      - name: Upload bundle to shared services bucket
+        run: |
+          aws s3 sync --no-progress ./ s3://${{ secrets.SHARED_SERVICES_BUCKET }}/supamonitor/${GITHUB_REF_NAME#v} --exclude '*' --include '*tar.xz'
