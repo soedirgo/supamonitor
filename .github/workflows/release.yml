@@ -14,19 +14,15 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create-release.outputs.upload_url }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Create Release
-        id: create_release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref_name }}
-        run: |
-          gh release create "$tag" \
-              --repo="$GITHUB_REPOSITORY" \
-              --title="${tag}" \
-              --generate-notes
+      - uses: actions/checkout@v4
+
+      - uses: softprops/action-gh-release@v1
+        id: create-release
+        with:
+          generate_release_notes: true
 
   build-linux-gnu:
     name: release artifacts
