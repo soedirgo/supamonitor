@@ -204,7 +204,7 @@ pub unsafe extern "C-unwind" fn _PG_init() {
                 total_exec_time: elapsed.as_secs_f64(),
             };
             if let Ok(json) = serde_json::to_string(&log_entry) {
-                pgrx::info!("supamonitor_{SUPAMONITOR_VERSION}_log:{json}");
+                pgrx::log!("supamonitor_{SUPAMONITOR_VERSION}_log:{json}");
             }
         }
     }
