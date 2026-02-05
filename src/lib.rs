@@ -1,15 +1,20 @@
+use std::time::{Instant};
+
 use pgrx::{
-    pg_sys::{ffi::pg_guard_ffi_boundary, EnableQueryId},
+    pg_sys::{ffi::pg_guard_ffi_boundary, CleanQuerytext, EnableQueryId},
     prelude::*,
 };
 use serde::Serialize;
 
 pgrx::pg_module_magic!(name, version);
-
 #[derive(Serialize)]
+
 struct SmQueryLog<'a> {
+    query_id: i64,
     query: &'a str,
     calls: usize,
+    total_plan_time: f64,
+    total_exec_time: f64,
 }
 
 static SUPAMONITOR_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -142,18 +147,37 @@ pub unsafe extern "C-unwind" fn _PG_init() {
         dest: *mut pg_sys::DestReceiver,
         qc: *mut pg_sys::QueryCompletion,
     ) {
-        let query_text = std::ffi::CStr::from_ptr(query_string).to_string_lossy();
-        let log_entry = SmQueryLog {
-            query: &query_text,
-            calls: 1,
-        };
-        if let Ok(json) = serde_json::to_string(&log_entry) {
-            pgrx::log!("supamonitor_{SUPAMONITOR_VERSION}_log:{json}");
-        }
+        let utility_stmt = (*pstmt).utilityStmt;
+        // Skip logging for ExecuteStmt, PrepareStmt, and DeallocateStmt
+        let should_skip = !utility_stmt.is_null()
+            && matches!(
+                (*utility_stmt).type_,
+                pg_sys::NodeTag::T_ExecuteStmt
+                    | pg_sys::NodeTag::T_PrepareStmt
+                    | pg_sys::NodeTag::T_DeallocateStmt
+            );
 
-        if let Some(prev_hook) = PREV_PROCESS_UTILITY_HOOK {
-            pg_guard_ffi_boundary(|| {
-                prev_hook(
+        if !should_skip {
+            let query_id = (*pstmt).queryId;
+            let mut stmt_location = (*pstmt).stmt_location;
+            let mut stmt_len = (*pstmt).stmt_len;
+            let now = Instant::now();
+
+            if let Some(prev_hook) = PREV_PROCESS_UTILITY_HOOK {
+                pg_guard_ffi_boundary(|| {
+                    prev_hook(
+                        pstmt,
+                        query_string,
+                        read_only_tree,
+                        context,
+                        params,
+                        query_env,
+                        dest,
+                        qc,
+                    )
+                });
+            } else {
+                pg_sys::standard_ProcessUtility(
                     pstmt,
                     query_string,
                     read_only_tree,
@@ -162,19 +186,26 @@ pub unsafe extern "C-unwind" fn _PG_init() {
                     query_env,
                     dest,
                     qc,
-                )
-            });
-        } else {
-            pg_sys::standard_ProcessUtility(
-                pstmt,
-                query_string,
-                read_only_tree,
-                context,
-                params,
-                query_env,
-                dest,
-                qc,
-            );
+                );
+            }
+
+            let elapsed = now.elapsed();
+
+            let query_text = CleanQuerytext(query_string, &mut stmt_location, &mut stmt_len);
+            let query_text = std::ffi::CStr::from_ptr(query_text)
+                .to_str()
+                .unwrap_or("<invalid utf8>");
+
+            let log_entry = SmQueryLog {
+                query_id: query_id as i64,
+                query: &query_text,
+                calls: 1,
+                total_plan_time: 0.0,
+                total_exec_time: elapsed.as_secs_f64(),
+            };
+            if let Ok(json) = serde_json::to_string(&log_entry) {
+                pgrx::info!("supamonitor_{SUPAMONITOR_VERSION}_log:{json}");
+            }
         }
     }
 }
