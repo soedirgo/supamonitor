@@ -1,6 +1,6 @@
 [package]
 name = "supamonitor"
-version = "0.0.0"
+version = "0.0.4"
 rust-version = "1.92"
 edition = "2021"
 publish = false
