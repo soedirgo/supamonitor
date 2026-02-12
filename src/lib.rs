@@ -95,7 +95,7 @@ pub unsafe extern "C-unwind" fn _PG_init() {
                 query_id: query_id as i64,
                 query: &query_text,
                 calls: 0,
-                total_plan_time: elapsed.as_secs_f64(),
+                total_plan_time: elapsed.as_secs_f64() * 1000.0,
                 total_exec_time: 0.0,
             };
             if let Ok(json) = serde_json::to_string(&log_entry) {
@@ -193,7 +193,7 @@ pub unsafe extern "C-unwind" fn _PG_init() {
                     query: &query_text,
                     calls: 1,
                     total_plan_time: 0.0,
-                    total_exec_time: (*(*query_desc).totaltime).total,
+                    total_exec_time: (*(*query_desc).totaltime).total * 1000.0,
                 };
                 if let Ok(json) = serde_json::to_string(&log_entry) {
                     pgrx::log!("supamonitor_{SUPAMONITOR_VERSION}_log:{json}");
@@ -282,7 +282,7 @@ pub unsafe extern "C-unwind" fn _PG_init() {
             query: &query_text,
             calls: 1,
             total_plan_time: 0.0,
-            total_exec_time: elapsed.as_secs_f64(),
+            total_exec_time: elapsed.as_secs_f64() * 1000.0,
         };
         if let Ok(json) = serde_json::to_string(&log_entry) {
             pgrx::log!("supamonitor_{SUPAMONITOR_VERSION}_log:{json}");
