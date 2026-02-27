@@ -225,6 +225,11 @@ pub unsafe extern "C-unwind" fn _PG_init() {
         qc: *mut pg_sys::QueryCompletion,
     ) {
         let utility_stmt = (*pstmt).utilityStmt;
+        let query_id = (*pstmt).queryId;
+        (*pstmt).queryId = 0i64 as u64;
+        let mut stmt_location = (*pstmt).stmt_location;
+        let mut stmt_len = (*pstmt).stmt_len;
+
         // Skip logging for ExecuteStmt, PrepareStmt, and DeallocateStmt
         let should_skip = !utility_stmt.is_null()
             && matches!(
@@ -234,15 +239,35 @@ pub unsafe extern "C-unwind" fn _PG_init() {
                     | pg_sys::NodeTag::T_DeallocateStmt
             );
         if should_skip {
+            if let Some(prev_hook) = PREV_PROCESS_UTILITY_HOOK {
+                pg_guard_ffi_boundary(|| {
+                    prev_hook(
+                        pstmt,
+                        query_string,
+                        read_only_tree,
+                        context,
+                        params,
+                        query_env,
+                        dest,
+                        qc,
+                    )
+                });
+            } else {
+                pg_sys::standard_ProcessUtility(
+                    pstmt,
+                    query_string,
+                    read_only_tree,
+                    context,
+                    params,
+                    query_env,
+                    dest,
+                    qc,
+                );
+            }
             return;
         }
 
-        let query_id = (*pstmt).queryId;
-        let mut stmt_location = (*pstmt).stmt_location;
-        let mut stmt_len = (*pstmt).stmt_len;
         let now = Instant::now();
-
-        (*pstmt).queryId = 0i64 as u64;
 
         if let Some(prev_hook) = PREV_PROCESS_UTILITY_HOOK {
             pg_guard_ffi_boundary(|| {
